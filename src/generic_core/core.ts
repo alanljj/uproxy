@@ -24,6 +24,8 @@
 // Note that the proxy runs extremely slowly in debug ('*:D') mode.
 freedom['loggingprovider']().setConsoleFilter(['*:I']);
 
+var log :Logging.Log = new Logging.Log('core');
+
 var storage = new Core.Storage();
 
 // This is the channel to speak to the UI component of uProxy.
@@ -44,7 +46,8 @@ class UIConnector implements uProxy.UIAPI {
    */
   public update = (type:uProxy.Update, data?:any) => {
     var printableType :string = uProxy.Update[type];
-    console.log('update [' + printableType + ']', data);
+    log.info('update [%1]: %2', [printableType, JSON.stringify(
+        data, null, '  ')]);
     bgAppPageChannel.emit('' + type, data);
   }
 
@@ -61,7 +64,7 @@ class UIConnector implements uProxy.UIAPI {
   }
 
   public syncUser = (payload:UI.UserMessage) => {
-    console.log('Core: UI.syncUser ' + JSON.stringify(payload));
+    log.info('UI.syncUser: %1', [JSON.stringify(payload, null, '  ')]);
     this.update(uProxy.Update.USER_FRIEND, payload);
   }
 
@@ -98,19 +101,19 @@ class uProxyCore implements uProxy.CoreAPI {
   public loadGlobalSettings :Promise<void> = null;
 
   constructor() {
-    console.log('Preparing uProxy Core.');
     // Send the local webrtc fingerprint to the UI.
     // TODO: enable once we can use peerconnection from within the webworker.
     Auth.getLocalFingerprint().then((fingerprint) => {
-      console.log('Fetched local WebRTC fingerprint: ' + fingerprint);
+      log.info('fetched local WebRTC fingerprint: %1', [fingerprint]);
       ui.update(uProxy.Update.LOCAL_FINGERPRINT, fingerprint);
     }).catch((e) => {
-      console.error(e);
+      log.error('could not fetch local WebRTC fingerprint: %1' + [e.message]);
     });
 
     this.loadGlobalSettings = storage.load<Core.GlobalSettings>('globalSettings')
         .then((globalSettingsObj :Core.GlobalSettings) => {
-          console.log('Loaded global settings: ' + JSON.stringify(globalSettingsObj));
+          log.info('loaded global settings: %1' + [JSON.stringify(
+              globalSettingsObj, null, '  ')]);
           this.globalSettings = globalSettingsObj;
           // If no custom STUN servers were found in storage, use the default
           // servers.
@@ -128,7 +131,7 @@ class uProxyCore implements uProxy.CoreAPI {
             this.globalSettings.hasSeenWelcome = false;
           }
         }).catch((e) => {
-          console.log('No global settings loaded', e);
+          log.error('no global settings loaded: %1', [e.message]);
         });
   }
 
@@ -158,10 +161,8 @@ class uProxyCore implements uProxy.CoreAPI {
     var promiseCommandHandler = (args :uProxy.PromiseCommand) => {
       // Ensure promiseId is set for all requests
       if (!args.promiseId) {
-        var err = 'onPromiseCommand called for cmd ' + cmd +
-                  'with promiseId undefined';
-        console.error(err)
-        return Promise.reject(err);
+        return Promise.reject(new Error('onPromiseCommand called for cmd ' +
+            cmd + 'with promiseId undefined'));
       }
 
       // Call handler function, then return success or failure to UI.
@@ -199,15 +200,14 @@ class uProxyCore implements uProxy.CoreAPI {
       var loginPromise = network.login(true);
       loginPromise.then(() => {
         Social.notifyUI(networkName);
-        console.log('Logged in to manual network');
+        log.info('logged in to manual network');
       });
       return loginPromise;
     }
 
     if (!(networkName in Social.networks)) {
-      var warn = 'Network ' + networkName + ' does not exist.';
-      console.warn(warn)
-      return Promise.reject(warn);
+      return Promise.reject(new Error('network ' + networkName +
+          ' does not exist'));
     }
     var network = Social.pendingNetworks[networkName];
     if (typeof network === 'undefined') {
@@ -224,8 +224,8 @@ class uProxyCore implements uProxy.CoreAPI {
           }
           Social.networks[networkName][userId] = network;
           delete Social.pendingNetworks[networkName];
-          console.log('Successfully logged in to ' + networkName +
-                      ' with user id ' + userId);
+          log.info('successfully logged into %1 with user id %2',
+              [networkName, userId]);
         }).catch(() => {
           delete Social.pendingNetworks[networkName];
         });
@@ -243,11 +243,11 @@ class uProxyCore implements uProxy.CoreAPI {
     var userId = networkInfo.userId;
     var network = Social.getNetwork(networkName, userId);
     if (null === network) {
-      console.warn('Could not logout of network ', networkName);
+      log.warn('could not logout of network %1', [networkName]);
       return;
     }
     return network.logout().then(() => {
-      console.log('Successfully logged out of ' + networkName);
+      log.info('successfully logged out of %1', [networkName]);
     });
     // TODO: disable auto-login
     // store.saveMeToStorage();
@@ -299,7 +299,7 @@ class uProxyCore implements uProxy.CoreAPI {
     // Determine which Network, User, and Instance...
     var instance = this.getInstance(command.path);
     if (!instance) {  // Error msg emitted above.
-      console.error('Cannot modify consent for non-existing instance!');
+      log.error('cannot modify consent for non-existing instance!');
       return;
     }
     // Set the instance's new consent levels. It will take care of sending new
@@ -315,16 +315,15 @@ class uProxyCore implements uProxy.CoreAPI {
   public start = (path :InstancePath) : Promise<Net.Endpoint> => {
     // Disable any previous proxying session.
     if (remoteProxyInstance) {
-      console.log('Existing proxying session! Terminating...');
+      log.info('terminating existing proxying session...');
       // Stop proxy, don't notify UI since UI request a new proxy.
       remoteProxyInstance.stop();
       remoteProxyInstance = null;
     }
     var remote = this.getInstance(path);
     if (!remote) {
-      var err = 'Instance ' + path.instanceId + ' does not exist for proxying.';
-      console.error(err);
-      return Promise.reject(err);
+      return Promise.reject(new Error('instance ' + path.instanceId +
+          ' does not exist for proxying'));
     }
     // Remember this instance as our proxy.  Set this before start fulfills
     // in case the user decides to cancel the proxy before it begins.
@@ -343,7 +342,7 @@ class uProxyCore implements uProxy.CoreAPI {
    */
   public stop = () => {
     if (!remoteProxyInstance) {
-      console.error('Cannot stop proxying when there is no proxy');
+      log.error('cannot stop proxying when there is no proxy');
     }
     remoteProxyInstance.stop();
     remoteProxyInstance = null;
@@ -355,8 +354,8 @@ class uProxyCore implements uProxy.CoreAPI {
     var manualNetwork :Social.ManualNetwork =
         <Social.ManualNetwork> Social.getNetwork(Social.MANUAL_NETWORK_ID, '');
     if (!manualNetwork) {
-      console.error('Manual network does not exist; discarding inbound ' +
-                    'message. Command=' + JSON.stringify(command));
+      log.error('manual network does not exist; discarding inbound message: %1',
+          [JSON.stringify(command, null, '  ')]);
       return;
     }
 
@@ -369,12 +368,12 @@ class uProxyCore implements uProxy.CoreAPI {
   public getInstance = (path :InstancePath) : Core.RemoteInstance => {
     var network = Social.getNetwork(path.network.name, path.network.userId);
     if (!network) {
-      console.error('No network ' + path.network.name);
+      log.error('no network %1', [path.network.name]);
       return;
     }
     var user = network.getUser(path.userId);
     if (!user) {
-      console.error('No user ' + path.userId);
+      log.error('no user %1', [path.userId]);
       return;
     }
     return user.getInstance(path.instanceId);
@@ -388,7 +387,7 @@ var core = new uProxyCore();
 
 
 function _validateKeyHash(keyHash:string) {
-  console.log('Warning: keyHash Validation not yet implemented...');
+  log.warn('keyHash Validation not yet implemented');
   return true;
 }
 
